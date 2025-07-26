@@ -19,13 +19,14 @@ fn main() -> std::io::Result<()> {
     let file_buffer = fs::read_to_string(filename)?;
 
     let mut pos = 0;
-    let mut token = lexer::lex(&file_buffer, &mut pos);
+    let mut line_number = 0;
+    let mut token = lexer::lex(&file_buffer, &mut pos, &mut line_number);
     pos = pos + 1;
 
     let mut pos = 0;
     let mut tokens = Vec::new();
     loop {
-        match lexer::lex(&file_buffer, &mut pos) {
+        match lexer::lex(&file_buffer, &mut pos, &mut line_number) {
             Some(tok) => {
                 // println!("DEBUG {:?}", tok);
                 if tok.ttype == lexer::TokenType::Eof {
@@ -35,7 +36,7 @@ fn main() -> std::io::Result<()> {
                 tokens.push(tok);
             }
             None => {
-                eprintln!("Lexing error near position {}", pos);
+                // LEXICAL ERRORS
                 break;
             }
         }
@@ -179,6 +180,10 @@ fn pretty_print(node: &ASTNode, prefix: &str, is_last: bool) {
             for (i, stmt) in block.iter().enumerate() {
                 pretty_print(stmt, &new_prefix, i == block.len() - 1);
             }
+        }
+
+        ASTNode::ImportNode ( name ) => {
+            println!("Import({})", name);
         }
     }
 }

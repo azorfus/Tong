@@ -1,0 +1,23 @@
+func main() {
+    let x = 10;
+    let y = 20;
+    let result = x + y * 2 - (5 / 2) % 3;
+
+    if result > 10 {
+        return true;
+    } elif result == 10 {
+        return false;
+    } else {
+        return x < y;
+    }
+
+    loop {
+        x = x - 1;
+        if x == 0 {
+            break;
+        }
+    }
+
+    let msg = "hello, world";
+    let flag = true or false and true;
+}

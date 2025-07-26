@@ -1,32 +1,6 @@
 use crate::lexer::{Token, TokenType};
 
 #[derive(Debug)]
-enum Types {
-    
-}
-
-#[derive(Debug)]
-pub enum TypeNode {
-    Unknown,
-    Ui8,
-    Ui16,
-    Ui32,
-    Ui64,
-    Ii8,
-    Ii16,
-    Ii32,
-    Ii64,
-    Fi32,
-    Bool,
-    Tensor,
-    Const,
-    ArrayType {
-        element_type: Box<TypeNode>,
-        size: usize,
-    },
-}
-
-#[derive(Debug)]
 pub enum ASTNode {
 
     Eof,
@@ -34,6 +8,8 @@ pub enum ASTNode {
     Number(f64),
 
     Identifier(String),
+
+    ImportNode(String),
 
     StrLiteral(String),
 
@@ -43,11 +19,6 @@ pub enum ASTNode {
 
     ReturnNode(Option<Box<ASTNode>>),
 
-    ArrayNode {
-        atype: TypeNode,
-        values: Vec<ASTNode>,
-    }
-
     BinOpNode {
         op: String,
         left: Box<ASTNode>,
@@ -56,8 +27,6 @@ pub enum ASTNode {
 
     VarDecNode {
         name: String,
-        vtype: TypeNode,
-        mutability: bool,
         value: Box<ASTNode>,
     },
 
@@ -85,7 +54,6 @@ pub enum ASTNode {
 
     FuncDef {
         name: String,
-        rtype: TypeNode,
         arguments: Vec<ASTNode>,
         block: Vec<ASTNode>,
     },
@@ -114,13 +82,27 @@ impl Parser {
 
     fn puke(&mut self) {
         if self.pos - 1 >= 0 {
-            self.pos-=1;
+            self.pos -= 1;
         }
     }
 
     fn current(&self) -> Option<&Token> {
         return self.tokens.get(self.pos);
     }    
+
+    fn shout_err(&self, desc: &str, token: Option<&Token>) {
+        if let Some(tok) = token {
+            eprintln!(
+                "[!] [Parser Error] Error parsing at line: {} ({})",
+                tok.line_num, desc
+            );
+        } else {
+            eprintln!(
+                "[!] [Parser Error] Unexpected end of input ({})",
+                desc
+            );
+        }
+    }
 
     pub fn is_at_end(&self) -> bool {
         matches!(self.current(), Some(Token { ttype: TokenType::Eof, .. }))
@@ -141,10 +123,6 @@ impl Parser {
                 if self.current()?.ttype == TokenType::Opt {
                     self.puke();
                     return self.parse_func_call();
-                }
-                else if self.current()?.ttype == TokenType::Osq {
-                    self.puke();
-                    return self.parse_array_call();
                 }
                 else { 
                     self.puke(); 
@@ -175,8 +153,7 @@ impl Parser {
                 let node = self.parse_expr(false)?; 
                 let next = self.current()?; 
                 if next.ttype != TokenType::Cpt {
-                    println!("[!] Error parsing at Token: {}", self.pos);
-                    println!("{:?}", self.current()?);
+                    self.shout_err("Expected closing parenthesis after expression", Some(&next));
                     return None;
                 }
                 self.consume();
@@ -184,8 +161,7 @@ impl Parser {
             }
 
             _ => {
-                    println!("[!] Error parsing at Token: {}", self.pos);
-                    println!("{:?}", self.current()?);
+                    self.shout_err("Unexpected token in factor", self.current());
                     return None;
                 }
         }
@@ -196,7 +172,7 @@ impl Parser {
 
         while let Some(token) = self.current() {
             match token.ttype {
-                TokenType::Mul | TokenType::Div => {
+                TokenType::Mul | TokenType::Div | TokenType::Mod => {
                     let op = token.value.clone();
                     self.consume();
                     node = ASTNode::BinOpNode {
@@ -234,48 +210,6 @@ impl Parser {
 
         return Some(node);
     }
-
-/* Unnecessary
-    fn parse_str_expr(&mut self) -> Option<ASTNode> {
-        
-        let initial = self.current()?;
-        self.consume();
-
-        if self.current()?.ttype == TokenType::Add {
-            
-            let mut strings: Vec<ASTNode> = Vec::new();
-            strings.push(ASTNode::StrLiteral(initial.value.clone()));
-
-            while self.current()?.ttype == TokenType::Add {
-                self.consume(); 
-
-                match self.current()?.ttype {
-                    TokenType::Str => {
-                        let temp = self.current()?.value.clone();
-                        strings.push(ASTNode::StrLiteral(temp));
-                    },
-
-                    TokenType::Iden => {
-                        let temp = self.current()?.value.clone();
-                        strings.push(ASTNode::Identifier(temp));
-                    },
-
-                    _ => return None, // shout error if other types
-                }
-
-                self.consume();
-            }
-
-            return Some(ASTNode::StrNode {
-                op: String::from("+"),
-                values: strings,
-            });
-        }
-        else {
-            return Some(ASTNode::StrLiteral(initial.value.clone()));
-        }
-    }
-*/
 
     fn parse_comp_expr(&mut self) -> Option<ASTNode> {
         let mut node = self.parse_arith_expr()?;
@@ -328,7 +262,7 @@ impl Parser {
             TokenType::True | TokenType::False => {
                 let mut node = self.parse_logic_expr()?;
                 if terminate == true && self.current()?.ttype != TokenType::Scln {
-                    println!("Expected semicolon!!!");
+                    self.shout_err("Expected Semicolon", self.current());
                     return None;
                 } else if terminate == true && self.current()?.ttype == TokenType::Scln {
                     self.consume();
@@ -347,6 +281,7 @@ impl Parser {
     pub fn parse_statement(&mut self) -> Option<ASTNode> {
         match self.current()?.ttype {
             TokenType::Eof => return Some(ASTNode::Eof),
+            TokenType::Import => self.parse_import(),
             TokenType::Let => self.parse_var_def(),
             TokenType::Func => self.parse_func_def(),
             TokenType::If => self.parse_ifelse(),
@@ -354,10 +289,12 @@ impl Parser {
 
             TokenType::Break => {
                                     self.consume(); // consume break
+                                    
                                     if self.current()?.ttype != TokenType::Scln {
-                                        println!("Expected semicolon near break!");
+                                        self.shout_err("Expected Semicolon", self.current());
                                         return None;
                                     }
+
                                     self.consume();
                                     Some(ASTNode::BreakNode)
                                 }
@@ -371,7 +308,7 @@ impl Parser {
                 } else {
 
                     if self.current()?.ttype != TokenType::Scln {
-                        println!("Expected semicolon near break!");
+                        self.shout_err("Expected Semicolon", self.current());
                         return None;
                     }
 
@@ -388,21 +325,10 @@ impl Parser {
                     let node = self.parse_func_call();
 
                     if self.current()?.ttype != TokenType::Scln {
-                        println!("Expected semicolon!!!");
+                        self.shout_err("Expected Semicolon", self.current());
                         return None;
                     }
-                    self.consume();
-                    return node;
-                }
-                // Parsing array accessors
-                else if self.current()?.ttype == TokenType::Osq {
-                    self.puke();
-                    let node = self.parse_array_call();
 
-                    if self.current()?.ttype != TokenType::Csq {
-                        println!("Expected closed brackets!!!");
-                        return None;
-                    }
                     self.consume();
                     return node;
                 }
@@ -411,8 +337,7 @@ impl Parser {
                     return self.parse_assign();
                 }
                 else {  
-                    println!("[!]Error parsing at Token (Statement) : {}", self.pos);
-                    println!("{:?}", self.current()?);
+                    self.shout_err("Unexpected token in statement", self.current());
                     return None; 
                 }
             }
@@ -421,7 +346,27 @@ impl Parser {
         }
     }
 
+    fn parse_import(&mut self) -> Option<ASTNode> {
+        self.consume(); // consume the import token
+
+        if self.current()?.ttype != TokenType::Str {
+            self.shout_err("Invalid Module", self.current());
+            return None;
+        }
+
+        let name = self.current()?.value.clone();
+        self.consume();
+
+        return Some(ASTNode::ImportNode(name));
+    }
+
     fn parse_block(&mut self) -> Option<Vec<ASTNode>> {
+
+        if self.current()?.ttype != TokenType::Ocl {
+            self.shout_err("Expected opening brace '{' for block", self.current());
+            return None;
+        }
+
         self.consume(); // consume {
         
         let mut statements: Vec<ASTNode> = Vec::new();
@@ -440,9 +385,13 @@ impl Parser {
         } 
 
         if self.current()?.ttype != TokenType::Ccl {
-            println!("[!] Error parsing at Token: (Block Error) {}", self.pos);
-            println!("{:?}", self.current()?);
+            self.shout_err("Unterminated block", self.current());
             return None; // unterminated block
+        }
+
+        if self.current()?.ttype != TokenType::Ccl {
+            self.shout_err("Expected closing brace '}' for block", self.current());
+            return None;
         }
 
         self.consume(); // Consume }
@@ -450,59 +399,8 @@ impl Parser {
         return Some(statements);
     }
 
-    fn parse_array_call(&mut self) -> Option<ASTNode> {
-        
-    }
-
     fn parse_var_def(&mut self) -> Option<ASTNode> {
         self.consume(); // consume the 'let'
-
-        let mut rtype: TypeNode = TypeNode::Unknown;
-        let mut mutability = true;
-
-        let mut vtype = match self.current()?.ttype {
-            TokenType::Ui8     => TypeNode::Ui8,
-            TokenType::Ui16    => TypeNode::Ui16,
-            TokenType::Ui32    => TypeNode::Ui32,
-            TokenType::Ui64    => TypeNode::Ui64,
-            TokenType::Ii8     => TypeNode::Ii8,
-            TokenType::Ii16    => TypeNode::Ii16,
-            TokenType::Ii32    => TypeNode::Ii32,
-            TokenType::Ii64    => TypeNode::Ii64,
-            TokenType::Fi32    => TypeNode::Fi32,
-            TokenType::Bool    => TypeNode::Bool,
-            TokenType::Tensor  => TypeNode::Tensor,
-            TokenType::Const   => TypeNode::Const,
-            _ => TypeNode::Unknown,
-        };
-
-        self.consume(); // consume type identifier
-
-        if vtype == TypeNode::Const {
-            mutability = false;
-            self.consume();
-
-            let mut vtype = match self.current()?.ttype {
-                TokenType::Ui8     => TypeNode::Ui8,
-                TokenType::Ui16    => TypeNode::Ui16,
-                TokenType::Ui32    => TypeNode::Ui32,
-                TokenType::Ui64    => TypeNode::Ui64,
-                TokenType::Ii8     => TypeNode::Ii8,
-                TokenType::Ii16    => TypeNode::Ii16,
-                TokenType::Ii32    => TypeNode::Ii32,
-                TokenType::Ii64    => TypeNode::Ii64,
-                TokenType::Fi32    => TypeNode::Fi32,
-                TokenType::Bool    => TypeNode::Bool,
-                TokenType::Tensor  => TypeNode::Tensor,
-                _ => TypeNode::Unknown,
-            };
-
-            self.consume();
-        }
-
-        if vtype == TypeNode::Unknown {
-            println!("Type not found!");
-        }
 
         let name = self.current()?.value.clone();
         self.consume();
@@ -511,8 +409,6 @@ impl Parser {
 
         let mut node = ASTNode::VarDecNode {
             name: name,
-            vtype: vtype,
-            mutability: mutability,
             value: Box::new(value),
         };
 
@@ -522,35 +418,14 @@ impl Parser {
     fn parse_func_def(&mut self) -> Option<ASTNode> { 
         self.consume(); // consume the 'fn'
 
-        let mut rtype: TypeNode = TypeNode::Unknown;
-
-        let rtype = match self.current()?.ttype {
-            TokenType::Ui8     => TypeNode::Ui8,
-            TokenType::Ui16    => TypeNode::Ui16,
-            TokenType::Ui32    => TypeNode::Ui32,
-            TokenType::Ui64    => TypeNode::Ui64,
-            TokenType::Ii8     => TypeNode::Ii8,
-            TokenType::Ii16    => TypeNode::Ii16,
-            TokenType::Ii32    => TypeNode::Ii32,
-            TokenType::Ii64    => TypeNode::Ii64,
-            TokenType::Fi32    => TypeNode::Fi32,
-            TokenType::Bool    => TypeNode::Bool,
-            TokenType::Tensor  => TypeNode::Tensor,
-            _ => TypeNode::Unknown,
-        };
-        self.consume(); // consume type identifier
-
-
         let name = self.current()?.value.clone();
         self.consume();
-
         let arguments = self.parse_args_def()?;  
 
         if let Some(block) = self.parse_block() {  
 
             let node = ASTNode::FuncDef {
                 name,
-                rtype,
                 arguments,
                 block,
             };
@@ -578,27 +453,32 @@ impl Parser {
     }
 
     fn parse_args_def(&mut self) -> Option<Vec<ASTNode>> {
-        self.consume(); // consume (
+        self.consume(); // consume ( 
+
+        if self.current()?.ttype == TokenType::Cpt {
+            self.consume(); // consume ) 
+            return None;
+        }
 
         let mut arguments = Vec::new();
 
         while let Some(token) = self.current() {
 
             if token.ttype == TokenType::Cpt {
-                self.consume(); // consume )
+                self.consume(); // consume ) 
                 return Some(arguments);
             }
 
             arguments.push(ASTNode::Identifier(token.value.clone()));
-            self.consume(); // consume identifier
+            self.consume(); // consume identifier 
 
             match self.current()?.ttype {
 
                 TokenType::Com => {
-                    self.consume(); // consume ,
+                    self.consume(); // consume , 
                 }
                 TokenType::Cpt => {
-                    self.consume(); // consume )
+                    self.consume(); // consume ) 
                     return Some(arguments);
                 }
 
@@ -633,8 +513,7 @@ impl Parser {
                     return Some(arguments);
                 }
                 _ => {
-                        println!("[!] Error parsing at Token: (Call error) {}", self.pos);
-                        println!("{:?}", self.current()?);
+                        self.shout_err("Error parsing at Token: (Call error)", self.current());
                         return None;
                      }
             }
@@ -646,8 +525,7 @@ impl Parser {
         self.consume(); // consume loop identifier
 
         if self.current()?.ttype != TokenType::Opt {
-            println!("[!] Error parsing at Token: {}", self.pos);
-            println!("{:?}", self.current()?);
+            self.shout_err("Expected opening parenthesis after 'loop'", self.current());
             return None;
         }
         self.consume(); // consume (
@@ -655,8 +533,7 @@ impl Parser {
         let condition = self.parse_expr(false)?;
 
         if self.current()?.ttype != TokenType::Cpt {
-            println!("[!] Error parsing at Token: {}", self.pos);
-            println!("{:?}", self.current()?);
+            self.shout_err("Expected closing parenthesis after loop condition", self.current());
             return None;
         }
         self.consume(); // consume )
