@@ -1,5 +1,13 @@
 use crate::lexer::{Token, TokenType};
 
+#[derive(Debug )]
+pub enum ParserError {
+    UnexpectedToken(String, u32),
+    UnterminatedBlock(u32),
+    ExpectedSemicolon(u32),
+    ExpectedToken(String, u32),
+}
+
 #[derive(Debug)]
 pub enum ASTNode {
 
@@ -86,36 +94,19 @@ impl Parser {
         }
     }
 
-    fn current(&self) -> Option<&Token> {
-        return self.tokens.get(self.pos);
+    fn current(&self) -> Result<&Token, ParserError> {
+        self.tokens.get(self.pos)
+            .ok_or(ParserError::UnexpectedToken("Unexpected end of input".into(), 0))
     }    
 
-    fn shout_err(&self, desc: &str, token: Option<&Token>) {
-        if let Some(tok) = token {
-            eprintln!(
-                "[!] [Parser Error] Error parsing at line: {} ({})",
-                tok.line_num, desc
-            );
-        } else {
-            eprintln!(
-                "[!] [Parser Error] Unexpected end of input ({})",
-                desc
-            );
-        }
-    }
-
-    pub fn is_at_end(&self) -> bool {
-        matches!(self.current(), Some(Token { ttype: TokenType::Eof, .. }))
-    }
-
-    fn parse_factor(&mut self) -> Option<ASTNode> {
+    fn parse_factor(&mut self) -> Result<ASTNode, ParserError> {
         let token = self.current()?; // Safely unwrap Option<&Token>
 
         match token.ttype {
             TokenType::Num => {
-                let num = token.value.parse::<f64>().ok()?;
+                let num = token.value.parse::<f64>().unwrap_or_default();
                 self.consume();
-                return Some(ASTNode::Number(num));
+                return Ok(ASTNode::Number(num));
             }
 
             TokenType::Iden => { 
@@ -128,24 +119,24 @@ impl Parser {
                     self.puke(); 
                     let iden = self.current()?.value.clone();
                     self.consume();
-                    return Some(ASTNode::Identifier(iden));
+                    return Ok(ASTNode::Identifier(iden));
                 }
             }
 
             TokenType::Str => {
                 let iden = token.value.clone();
                 self.consume();
-                return Some(ASTNode::StrLiteral(iden));
+                return Ok(ASTNode::StrLiteral(iden));
             }
 
             TokenType::True => {
                 self.consume();
-                return Some(ASTNode::BoolNode(true));
+                return Ok(ASTNode::BoolNode(true));
             }
 
             TokenType::False => {
                 self.consume();
-                return Some(ASTNode::BoolNode(false));
+                return Ok(ASTNode::BoolNode(false));
             }
 
             TokenType::Opt => { 
@@ -153,24 +144,28 @@ impl Parser {
                 let node = self.parse_expr(false)?; 
                 let next = self.current()?; 
                 if next.ttype != TokenType::Cpt {
-                    self.shout_err("Expected closing parenthesis after expression", Some(&next));
-                    return None;
+                    // self.shout_err("Expected closing parenthesis after expression", Some(&next));
+                    return Err(ParserError::ExpectedToken("closing parenthesis".into(), next.line_num));
                 }
                 self.consume();
-                return Some(node);
+                return Ok(node);
             }
 
             _ => {
-                    self.shout_err("Unexpected token in factor", self.current());
-                    return None;
+                    // self.shout_err("Unexpected token in factor", self.current());
+                    return Err(ParserError::UnexpectedToken(token.value.clone(), token.line_num));
                 }
         }
     }
 
-    fn parse_term(&mut self) -> Option<ASTNode> {
+    fn parse_term(&mut self) -> Result<ASTNode, ParserError> {
         let mut node = self.parse_factor()?;
 
-        while let Some(token) = self.current() {
+        loop {
+            let token = match self.current() {
+                Ok(token) => token,
+                Err(_) => break,
+            };
             match token.ttype {
                 TokenType::Mul | TokenType::Div | TokenType::Mod => {
                     let op = token.value.clone();
@@ -181,18 +176,21 @@ impl Parser {
                         right: Box::new(self.parse_factor()?),
                     };
                 }
-
                 _ => break,
             }
         }
 
-        return Some(node);
+        return Ok(node);
     }
 
-    fn parse_arith_expr(&mut self) -> Option<ASTNode> {
+    fn parse_arith_expr(&mut self) -> Result<ASTNode, ParserError> {
         let mut node = self.parse_term()?;
 
-        while let Some(token) = self.current() {
+        loop {
+            let token = match self.current() {
+                Ok(token) => token,
+                Err(_) => break,
+            };
             match token.ttype {
                 TokenType::Add | TokenType::Sub => {
                     let op = token.value.clone();
@@ -203,18 +201,21 @@ impl Parser {
                         right: Box::new(self.parse_term()?),
                     };
                 }
-
                 _ => break,
             }
         }
 
-        return Some(node);
+        return Ok(node);
     }
 
-    fn parse_comp_expr(&mut self) -> Option<ASTNode> {
+    fn parse_comp_expr(&mut self) -> Result<ASTNode, ParserError> {
         let mut node = self.parse_arith_expr()?;
 
-        while let Some(token) = self.current() {
+        loop {
+            let token = match self.current() {
+                Ok(token) => token,
+                Err(_) => break,
+            };
             match token.ttype {
                 TokenType::Geq | TokenType::Leq | TokenType::Gre | TokenType::Les | TokenType::Eqv => {
                     let op = token.value.clone();
@@ -225,18 +226,21 @@ impl Parser {
                         right: Box::new(self.parse_arith_expr()?),
                     };
                 }
-
                 _ => break,
             }
         }
 
-        return Some(node);
+        return Ok(node);
     }
 
-    fn parse_logic_expr(&mut self) -> Option<ASTNode> {
+    fn parse_logic_expr(&mut self) -> Result<ASTNode, ParserError> {
         let mut node = self.parse_comp_expr()?;
 
-        while let Some(token) = self.current() {
+        loop {
+            let token = match self.current() {
+                Ok(token) => token,
+                Err(_) => break,
+            };
             match token.ttype {
                 TokenType::And | TokenType::Or => {
                     let op = token.value.clone();
@@ -247,40 +251,39 @@ impl Parser {
                         right: Box::new(self.parse_comp_expr()?),
                     };
                 }
-
                 _ => break,
             }
         }
 
-        return Some(node);
+        return Ok(node);
     }
 
-    fn parse_expr(&mut self, terminate: bool) -> Option<ASTNode> {
+    fn parse_expr(&mut self, terminate: bool) -> Result<ASTNode, ParserError> {
         match self.current()?.ttype {
             
             TokenType::Iden | TokenType::Num | TokenType::Str | 
             TokenType::True | TokenType::False => {
                 let mut node = self.parse_logic_expr()?;
                 if terminate == true && self.current()?.ttype != TokenType::Scln {
-                    self.shout_err("Expected Semicolon", self.current());
-                    return None;
+                    // self.shout_err("Expected Semicolon", self.current());
+                    return Err(ParserError::ExpectedSemicolon(self.current()?.line_num));
                 } else if terminate == true && self.current()?.ttype == TokenType::Scln {
                     self.consume();
                 }
 
-                return Some(node);
+                return Ok(node);
             }
 
             _ =>    {
-                        None
+                        Err(ParserError::UnexpectedToken("Invalid start of expression".into(), self.current()?.line_num))
                     },
         }
 
     }
 
-    pub fn parse_statement(&mut self) -> Option<ASTNode> {
+    pub fn parse_statement(&mut self) -> Result<ASTNode, ParserError> {
         match self.current()?.ttype {
-            TokenType::Eof => return Some(ASTNode::Eof),
+            TokenType::Eof => return Ok(ASTNode::Eof),
             TokenType::Import => self.parse_import(),
             TokenType::Let => self.parse_var_def(),
             TokenType::Func => self.parse_func_def(),
@@ -291,29 +294,29 @@ impl Parser {
                                     self.consume(); // consume break
                                     
                                     if self.current()?.ttype != TokenType::Scln {
-                                        self.shout_err("Expected Semicolon", self.current());
-                                        return None;
+                                        // self.shout_err("Expected Semicolon", self.current());
+                                        return Err(ParserError::ExpectedSemicolon(self.current()?.line_num));
                                     }
 
                                     self.consume();
-                                    Some(ASTNode::BreakNode)
+                                    Ok(ASTNode::BreakNode)
                                 }
 
             TokenType::Return => {
                 self.consume(); // consume return
-                if let Some(node) = self.parse_expr(true) {
+                if let Ok(node) = self.parse_expr(true) {
 
-                    Some(ASTNode::ReturnNode(Some(Box::new(node))))
+                    Ok(ASTNode::ReturnNode(Some(Box::new(node))))
 
                 } else {
 
                     if self.current()?.ttype != TokenType::Scln {
-                        self.shout_err("Expected Semicolon", self.current());
-                        return None;
+                        // self.shout_err("Expected Semicolon", self.current());
+                        return Err(ParserError::ExpectedSemicolon(self.current()?.line_num));
                     }
 
                     self.consume();
-                    Some(ASTNode::ReturnNode(None))
+                    Ok(ASTNode::ReturnNode(None))
                 }
             }
 
@@ -325,8 +328,8 @@ impl Parser {
                     let node = self.parse_func_call();
 
                     if self.current()?.ttype != TokenType::Scln {
-                        self.shout_err("Expected Semicolon", self.current());
-                        return None;
+                        // self.shout_err("Expected Semicolon", self.current());
+                        return Err(ParserError::ExpectedSemicolon(self.current()?.line_num));
                     }
 
                     self.consume();
@@ -337,8 +340,8 @@ impl Parser {
                     return self.parse_assign();
                 }
                 else {  
-                    self.shout_err("Unexpected token in statement", self.current());
-                    return None; 
+                    // self.shout_err("Unexpected token in statement", self.current());
+                    return Err(ParserError::UnexpectedToken(self.current()?.value.clone(), self.current()?.line_num)); 
                 }
             }
 
@@ -346,60 +349,69 @@ impl Parser {
         }
     }
 
-    fn parse_import(&mut self) -> Option<ASTNode> {
+    fn parse_import(&mut self) -> Result<ASTNode, ParserError> {
         self.consume(); // consume the import token
 
         if self.current()?.ttype != TokenType::Str {
-            self.shout_err("Invalid Module", self.current());
-            return None;
+            // self.shout_err("Invalid Module", self.current());
+            return Err(ParserError::UnexpectedToken("Invalid module string".into(), self.current()?.line_num));
         }
 
         let name = self.current()?.value.clone();
         self.consume();
 
-        return Some(ASTNode::ImportNode(name));
+        return Ok(ASTNode::ImportNode(name));
     }
 
-    fn parse_block(&mut self) -> Option<Vec<ASTNode>> {
+    fn parse_block(&mut self) -> Result<Vec<ASTNode>, ParserError> {
 
         if self.current()?.ttype != TokenType::Ocl {
-            self.shout_err("Expected opening brace '{' for block", self.current());
-            return None;
+            // self.shout_err("Expected opening brace '{' for block", self.current());
+            return Err(ParserError::ExpectedToken("{".into(), self.current()?.line_num));
         }
 
         self.consume(); // consume {
         
         let mut statements: Vec<ASTNode> = Vec::new();
+        
+        // seems very inefficient but rust whines if I try to 
+        // use a reference here so I have to clone the token
+        // and then use it in the loop condition 
+        
+        let thetype = self.current()?.ttype.clone();
+        let thenum = self.current()?.line_num;
+        let theval = self.current()?.value.clone();
 
-        while let Some(token) = self.current() {
+        loop {
 
-            if token.ttype == TokenType::Ccl {
-                break
+            if thetype == TokenType::Ccl {
+                break;
             }
 
-            if let Some(node) = self.parse_statement() {
-                statements.push(node);
-            } else {
-                return None;
+            match self.parse_statement() {
+                Ok(node) => statements.push(node),
+                Err(_) => {
+                    return Err(ParserError::UnexpectedToken(theval, thenum));
+                }
             }
         } 
 
         if self.current()?.ttype != TokenType::Ccl {
-            self.shout_err("Unterminated block", self.current());
-            return None; // unterminated block
+            // self.shout_err("Unterminated block", self.current());
+            return Err(ParserError::UnterminatedBlock(self.current()?.line_num)); // unterminated block
         }
 
         if self.current()?.ttype != TokenType::Ccl {
-            self.shout_err("Expected closing brace '}' for block", self.current());
-            return None;
+            // self.shout_err("Expected closing brace '}' for block", self.current());
+            return Err(ParserError::ExpectedToken("}".into(), self.current()?.line_num));
         }
 
         self.consume(); // Consume }
 
-        return Some(statements);
+        return Ok(statements);
     }
 
-    fn parse_var_def(&mut self) -> Option<ASTNode> {
+    fn parse_var_def(&mut self) -> Result<ASTNode, ParserError> {
         self.consume(); // consume the 'let'
 
         let name = self.current()?.value.clone();
@@ -412,33 +424,29 @@ impl Parser {
             value: Box::new(value),
         };
 
-        return Some(node);
+        return Ok(node);
     }
 
-    fn parse_func_def(&mut self) -> Option<ASTNode> { 
+    fn parse_func_def(&mut self) -> Result<ASTNode, ParserError> { 
         self.consume(); // consume the 'fn'
 
         let name = self.current()?.value.clone();
         self.consume();
-        let arguments = self.parse_args_def()?;  
+        let arguments = self.parse_args_def()?.unwrap_or_default();
 
-        if let Some(block) = self.parse_block() {  
-
+        if let Ok(block) = self.parse_block() {  
             let node = ASTNode::FuncDef {
                 name,
                 arguments,
                 block,
             };
-
-            return Some(node);
-
-        }
-        else {
-            return None;
+            return Ok(node);
+        } else {
+            return Err(ParserError::UnexpectedToken("Error parsing function definition".into(), self.current()?.line_num));
         }
     }
 
-    fn parse_func_call(&mut self) -> Option<ASTNode> {
+    fn parse_func_call(&mut self) -> Result<ASTNode, ParserError> {
         let name = self.current()?.value.clone();
         self.consume();
 
@@ -449,48 +457,56 @@ impl Parser {
             arguments,
         };
 
-        return Some(node); 
+        return Ok(node); 
     }
 
-    fn parse_args_def(&mut self) -> Option<Vec<ASTNode>> {
+    fn parse_args_def(&mut self) -> Result<Option<Vec<ASTNode>>, ParserError> {
         self.consume(); // consume ( 
 
         if self.current()?.ttype == TokenType::Cpt {
             self.consume(); // consume ) 
-            return None;
+            return Ok(None);
         }
 
         let mut arguments = Vec::new();
 
-        while let Some(token) = self.current() {
+        loop {
+            let token = match self.current() {
+                Ok(token) => token,
+                Err(_) => break,
+            };
 
             if token.ttype == TokenType::Cpt {
                 self.consume(); // consume ) 
-                return Some(arguments);
+                return Ok(Some(arguments));
             }
 
             arguments.push(ASTNode::Identifier(token.value.clone()));
             self.consume(); // consume identifier 
 
-            match self.current()?.ttype {
+            // After consuming, get the next token for the separator check
+            let sep_token = match self.current() {
+                Ok(token) => token,
+                Err(_) => break,
+            };
 
+            match sep_token.ttype {
                 TokenType::Com => {
                     self.consume(); // consume , 
                 }
                 TokenType::Cpt => {
                     self.consume(); // consume ) 
-                    return Some(arguments);
+                    return Ok(Some(arguments));
                 }
-
                 _ => {
-                        return None;
-                     }
+                    return Err(ParserError::UnexpectedToken("Error parsing function arguments".into(), sep_token.line_num));
+                }
             }
         }
-        None
+        Err(ParserError::UnexpectedToken("Error parsing function arguments".into(), 0))
     }
 
-    fn parse_args_call(&mut self) -> Option<Vec<ASTNode>> {
+    fn parse_args_call(&mut self) -> Result<Vec<ASTNode>, ParserError> {
         self.consume(); // consume (
 
         let mut arguments = Vec::new();
@@ -498,7 +514,7 @@ impl Parser {
         loop {
             if self.current()?.ttype == TokenType::Cpt {
                 self.consume(); // consume )
-                return Some(arguments);
+                return Ok(arguments);
             }
 
             let node = self.parse_expr(false)?; 
@@ -510,31 +526,31 @@ impl Parser {
                 }
                 TokenType::Cpt => {
                     self.consume(); // consume )
-                    return Some(arguments);
+                    return Ok(arguments);
                 }
                 _ => {
-                        self.shout_err("Error parsing at Token: (Call error)", self.current());
-                        return None;
+                        // self.shout_err("Error parsing at Token: (Call error)", self.current());
+                        return Err(ParserError::UnexpectedToken("Error parsing function call arguments".into(), self.current()?.line_num));
                      }
             }
         }
 
     }
 
-    fn parse_loop(&mut self) -> Option<ASTNode> {
+    fn parse_loop(&mut self) -> Result<ASTNode, ParserError> {
         self.consume(); // consume loop identifier
 
         if self.current()?.ttype != TokenType::Opt {
-            self.shout_err("Expected opening parenthesis after 'loop'", self.current());
-            return None;
+            // self.shout_err("Expected opening parenthesis after 'loop'", self.current());
+            return Err(ParserError::ExpectedToken("(".into(), self.current()?.line_num));
         }
         self.consume(); // consume (
 
         let condition = self.parse_expr(false)?;
 
         if self.current()?.ttype != TokenType::Cpt {
-            self.shout_err("Expected closing parenthesis after loop condition", self.current());
-            return None;
+            // self.shout_err("Expected closing parenthesis after loop condition", self.current());
+            return Err(ParserError::ExpectedToken(")".into(), self.current()?.line_num));
         }
         self.consume(); // consume )
 
@@ -545,7 +561,7 @@ impl Parser {
             block,
         };
 
-        return Some(node);
+        return Ok(node);
 
     }
 
@@ -560,17 +576,17 @@ impl Parser {
     
     */
 
-    fn parse_ifelse(&mut self) -> Option<ASTNode> {
+    fn parse_ifelse(&mut self) -> Result<ASTNode, ParserError> {
         self.consume(); // consume if identifier
 
         if self.current()?.ttype != TokenType::Opt {
-            return None;
+            return Err(ParserError::ExpectedToken("(".into(), self.current()?.line_num));
         }
         self.consume(); // consume (
 
         let ifcondition = self.parse_expr(false)?;
         if self.current()?.ttype != TokenType::Cpt {
-            return None;
+            return Err(ParserError::ExpectedToken(")".into(), self.current()?.line_num));
         }
         self.consume(); // consume )
 
@@ -582,13 +598,13 @@ impl Parser {
             self.consume(); // consume elif identifier
 
             if self.current()?.ttype != TokenType::Opt {
-                return None;
+                return Err(ParserError::ExpectedToken("(".into(), self.current()?.line_num));
             }
             self.consume(); // consume (
 
             let elifcondition = self.parse_expr(false)?;
             if self.current()?.ttype != TokenType::Cpt {
-                return None;
+                return Err(ParserError::ExpectedToken(")".into(), self.current()?.line_num));
             }
             self.consume(); // consume )
 
@@ -607,7 +623,7 @@ impl Parser {
             };
 
 
-        return Some(ASTNode::IfElseNode {
+        return Ok(ASTNode::IfElseNode {
             condition: Box::new(ifcondition),
             then_branch,
             elif_branch: elif_branches,
@@ -616,7 +632,7 @@ impl Parser {
 
     }
 
-    fn parse_assign(&mut self) -> Option<ASTNode> {
+    fn parse_assign(&mut self) -> Result<ASTNode, ParserError> {
         let name = self.current()?.value.clone();
         self.consume();
         self.consume(); // consume =
@@ -628,7 +644,14 @@ impl Parser {
             value: Box::new(value),
         };
 
-        return Some(node);
+        return Ok(node);
+    }
+
+    pub fn is_at_end(&self) -> bool {
+        match self.current() {
+            Ok(token) => token.ttype == TokenType::Eof,
+            Err(_) => true,
+        }
     }
 
 }

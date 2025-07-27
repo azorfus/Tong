@@ -48,11 +48,21 @@ fn main() -> std::io::Result<()> {
 
     while !parser.is_at_end() {
         match parser.parse_statement() {
-            Some(ast) => {
+            Ok(ast) => {
                 pretty_print(&ast, "", true);
             }
-            None => {
-                eprintln!("Parsing failed.");
+            Err(e) => {
+                match e {
+                    parser::ParserError::UnexpectedToken(_, line)
+                    | parser::ParserError::UnterminatedBlock(line)
+                    | parser::ParserError::ExpectedSemicolon(line)
+                    | parser::ParserError::ExpectedToken(_, line) => {
+                        eprintln!("Parsing failed at line {}: {:?}", line, e);
+                    }
+                    _ => {
+                        eprintln!("Parsing failed: {:?}", e);
+                    }
+                }
                 break;
             }
         }
