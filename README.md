@@ -1,5 +1,5 @@
 # Tong
-A **To**y Programming la**ng**uage made to understand parsing and code generation with LLVM
+A Toy Programming language made to understand parsing and code generation with LLVM
 This project is meant to help understand how parsing and code generation work.
 
 ## Goals
